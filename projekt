@@ -1,0 +1,230 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# -------------------------------
+# 1. Linear Transformations
+# -------------------------------
+def linear_transform(img, alpha=1.0, beta=0):
+    """
+    Perform linear transformation: output = alpha * img + beta
+    alpha >1 brightens (contrast), alpha<1 darkens; beta shifts brightness
+    """
+    return cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
+
+def negative(img):
+    """Compute negative of image"""
+    return 255 - img
+
+# -------------------------------
+# 2. Power (Gamma) Transform
+# -------------------------------
+def power_transform(img, gamma=1.0, c=1.0):
+    """
+    Perform power-law (gamma) transformation: c * (img_norm)^gamma
+    img_norm in [0,1]
+    """
+    img_norm = img / 255.0
+    out = c * np.power(img_norm, gamma)
+    out_uint8 = np.uint8(np.clip(out * 255, 0, 255))
+    return out_uint8
+
+# -------------------------------
+# 3. Blend Two Images (16 modes)
+# -------------------------------
+
+def blend_images(img1, img2, mode='add', alpha=0.5):
+    """
+    Blend two images with a specified mode.
+    Supported modes: add, subtract, multiply, divide,
+    average, weighted, min, max,
+    bit_and, bit_or, bit_xor,
+    screen, overlay, difference, dodge, burn
+    """
+    # Ensure same size
+    assert img1.shape == img2.shape, 'Images must be same size'
+    if mode == 'add':
+        return cv2.add(img1, img2)
+    if mode == 'subtract':
+        return cv2.subtract(img1, img2)
+    if mode == 'multiply':
+        return cv2.multiply(img1, img2)
+    if mode == 'divide':
+        return cv2.divide(img1, img2)
+    if mode == 'average':
+        return ((img1.astype(np.float32) + img2.astype(np.float32)) / 2).astype(np.uint8)
+    if mode == 'weighted':
+        return cv2.addWeighted(img1, alpha, img2, 1-alpha, 0)
+    if mode == 'min':
+        return np.minimum(img1, img2)
+    if mode == 'max':
+        return np.maximum(img1, img2)
+    if mode == 'bit_and':
+        return cv2.bitwise_and(img1, img2)
+    if mode == 'bit_or':
+        return cv2.bitwise_or(img1, img2)
+    if mode == 'bit_xor':
+        return cv2.bitwise_xor(img1, img2)
+    # Advanced blend modes
+    img1_f = img1.astype(np.float32)/255.0
+    img2_f = img2.astype(np.float32)/255.0
+    if mode == 'screen':
+        out = 1 - (1-img1_f)*(1-img2_f)
+    elif mode == 'overlay':
+        mask = img1_f <= 0.5
+        out = np.zeros_like(img1_f)
+        out[mask] = 2 * img1_f[mask] * img2_f[mask]
+        out[~mask] = 1 - 2*(1-img1_f[~mask])*(1-img2_f[~mask])
+    elif mode == 'difference':
+        out = np.abs(img1_f - img2_f)
+    elif mode == 'dodge':
+        out = np.minimum(img1_f / (1 - img2_f + 1e-6), 1.0)
+    elif mode == 'burn':
+        out = 1 - np.minimum((1-img1_f) / (img2_f + 1e-6), 1.0)
+    else:
+        raise ValueError(f"Unknown blend mode: {mode}")
+    return np.uint8(np.clip(out * 255, 0, 255))
+
+# -------------------------------
+# 4. Color Contrast Modulation
+# -------------------------------
+def adjust_color_contrast(img, clip_limit=2.0, tile_grid_size=(8,8)):
+    """
+    Adjust contrast of color image using CLAHE on the L channel in Lab space
+    """
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    cl = clahe.apply(l)
+    merged = cv2.merge((cl, a, b))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+# -------------------------------
+# 5. Histogram Generation
+# -------------------------------
+
+def plot_histogram(img, save_path=None):
+    """
+    Generate and optionally save histogram for R, G, B channels.
+    Returns matplotlib figure.
+    """
+    colors = ('b','g','r')
+    plt.figure()
+    for i, col in enumerate(colors):
+        hist = cv2.calcHist([img], [i], None, [256], [0,256])
+        plt.plot(hist, color=col)
+    plt.title('Histogram for B, G, R channels')
+    plt.xlabel('Pixel value')
+    plt.ylabel('Count')
+    if save_path:
+        plt.savefig(save_path)
+    return plt.gcf()
+
+# -------------------------------
+# 6. Histogram Equalization
+# -------------------------------
+
+def histogram_equalization(img):
+    """
+    Perform histogram equalization on each channel separately
+    """
+    channels = cv2.split(img)
+    eq_channels = [cv2.equalizeHist(ch) for ch in channels]
+    return cv2.merge(eq_channels)
+
+# -------------------------------
+# 7. Histogram Scaling (Stretching)
+# -------------------------------
+
+def histogram_stretch(img, in_min=0, in_max=255):
+    """
+    Perform contrast stretching: map [in_min,in_max] to [0,255]
+    """
+    lut = np.array([(i - in_min) * 255.0 / (in_max - in_min) if in_min < i < in_max else (0 if i<=in_min else 255)
+                    for i in range(256)], dtype=np.uint8)
+    return cv2.LUT(img, lut)
+
+# -------------------------------
+# 8. Low-Pass Filter
+# -------------------------------
+
+def low_pass_filter(img, ksize=3, filter_type='mean'):
+    """
+    Apply low-pass filter: 'mean' or 'gaussian'
+    """
+    if filter_type == 'mean':
+        return cv2.blur(img, (ksize, ksize))
+    elif filter_type == 'gaussian':
+        return cv2.GaussianBlur(img, (ksize, ksize), 0)
+    else:
+        raise ValueError("filter_type must be 'mean' or 'gaussian'")
+
+# -------------------------------
+# 9. High-Pass Filters
+# -------------------------------
+
+def high_pass_filter(img, operator='sobel', direction='horizontal'):
+    """
+    High-pass filters: 'roberts','prewitt','sobel','laplace'
+    For roberts/prewitt/sobel: direction 'horizontal' or 'vertical'
+    For laplace: operator 'laplace' and direction ignored
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if operator == 'roberts':
+        kx = np.array([[1, 0], [0, -1]], dtype=int)
+        ky = np.array([[0, 1], [-1, 0]], dtype=int)
+        kernel = kx if direction=='horizontal' else ky
+        filtered = cv2.filter2D(gray, -1, kernel)
+    elif operator == 'prewitt':
+        kx = np.array([[ -1, 0, 1], [ -1, 0, 1], [ -1, 0, 1]])
+        ky = kx.T
+        kernel = kx if direction=='horizontal' else ky
+        filtered = cv2.filter2D(gray, -1, kernel)
+    elif operator == 'sobel':
+        if direction == 'horizontal': filtered = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
+        else: filtered = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
+        filtered = cv2.convertScaleAbs(filtered)
+    elif operator == 'laplace':
+        # three different masks
+        kernels = [np.array([[0,1,0],[1,-4,1],[0,1,0]]),
+                   np.array([[1,1,1],[1,-8,1],[1,1,1]]),
+                   np.array([[2,-1,2],[-1,-4,-1],[2,-1,2]])]
+        # apply all and sum
+        filtered = sum([cv2.filter2D(gray, -1, k) for k in kernels])
+    else:
+        raise ValueError("Unsupported operator")
+    return filtered
+
+# -------------------------------
+# 10. Statistical Filters
+# -------------------------------
+
+def statistical_filter(img, mode='median', ksize=3):
+    """
+    Statistical filters: 'min','max','median'
+    """
+    if mode == 'min':
+        return cv2.erode(img, np.ones((ksize,ksize),np.uint8))
+    if mode == 'max':
+        return cv2.dilate(img, np.ones((ksize,ksize),np.uint8))
+    if mode == 'median':
+        return cv2.medianBlur(img, ksize)
+    raise ValueError("Unknown mode")
+
+# -------------------------------
+# Example usage
+# -------------------------------
+if __name__ == '__main__':
+    img = cv2.imread('image.jpg')
+    bright = linear_transform(img, alpha=1.2, beta=20)
+    dark = linear_transform(img, alpha=0.8, beta=0)
+    neg = negative(img)
+    gamma_up = power_transform(img, gamma=0.5)
+    gamma_down = power_transform(img, gamma=2.0)
+    cv2.imwrite('bright.jpg', bright)
+    cv2.imwrite('dark.jpg', dark)
+    cv2.imwrite('neg.jpg', neg)
+    cv2.imwrite('gamma_up.jpg', gamma_up)
+    cv2.imwrite('gamma_down.jpg', gamma_down)
+    # ... and so on for other functions
+    print('Processing complete.')
