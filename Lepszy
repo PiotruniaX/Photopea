@@ -1,0 +1,95 @@
+# simple_image_processing.py
+# Uproszczony skrypt wykonujący wszystkie 10 operacji na pliku "image.jpg"
+# i wyświetlający wyniki w okienkach OpenCV
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Wczytaj obraz (plik image.jpg w tym samym folderze)
+img = cv2.imread('image.jpg')
+if img is None:
+    raise FileNotFoundError('Brak pliku image.jpg')
+
+# Lista do przechowywania wyników i tytułów
+results = []
+
+# 1. Transformacje liniowe: rozjaśnienie, przyciemnienie, negatyw
+bright = cv2.convertScaleAbs(img, alpha=1.5, beta=30)
+dark = cv2.convertScaleAbs(img, alpha=0.5, beta=0)
+neg = 255 - img
+results += [('Bright', bright), ('Dark', dark), ('Negative', neg)]
+
+# 2. Transformacja potęgowa (gamma)
+gamma = 2.2
+lut = np.array([(i/255.0)**(1/gamma)*255 for i in range(256)], dtype=np.uint8)
+gamma_img = cv2.LUT(img, lut)
+results.append(('Gamma', gamma_img))
+
+# 3. Mieszanie obrazów (add, subtract, multiply, and) – przykład z kopią
+img2 = img.copy()
+results += [
+    ('Blend Add', cv2.add(img, img2)),
+    ('Blend Subtract', cv2.subtract(img, img2)),
+    ('Blend Multiply', cv2.multiply(img, img2)),
+    ('Blend AND', cv2.bitwise_and(img, img2))
+]
+
+# 4. Kontrast CLAHE
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+cl = clahe.apply(gray)
+results.append(('CLAHE', cv2.cvtColor(np.stack([cl,cl,cl], axis=-1), cv2.COLOR_BGR2RGB)))
+
+# 5. Histogram R,G,B – wygenerujemy wykres i wczytamy jako obraz
+groups = cv2.split(img)
+colors = ('b','g','r')
+plt.figure()
+for ch, col in zip(groups, colors):
+    hist = cv2.calcHist([ch],[0],None,[256],[0,256])
+    plt.plot(hist, label=col)
+plt.legend(); plt.title('Histogram RGB')
+plt.savefig('temp_hist.png')
+plt.close()
+hist_img = cv2.imread('temp_hist.png')
+hist_img = cv2.resize(hist_img, (img.shape[1], img.shape[0]))
+results.append(('Histogram', hist_img))
+
+# 6. Wyrównanie histogramu
+yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+yuv[:,:,0] = cv2.equalizeHist(yuv[:,:,0])
+eq = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
+results.append(('EqualizeHist', eq))
+
+# 7. Skalowanie histogramu
+norm = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+results.append(('Normalize', norm))
+
+# 8. Filtr dolnoprzepustowy (Gaussian)
+low = cv2.GaussianBlur(img, (5,5), 0)
+results.append(('Lowpass (Gaussian)', low))
+
+# 9. Filtry górnoprzepustowe (Sobel + Laplace)
+sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 1)
+sobel = cv2.convertScaleAbs(sobel)
+lap = cv2.Laplacian(gray, cv2.CV_64F)
+lap = cv2.convertScaleAbs(lap)
+results += [('Sobel', sobel), ('Laplace', lap)]
+
+# 10. Filtry statystyczne: min, max, median
+gerode = cv2.erode(gray, np.ones((3,3), np.uint8))
+dilate = cv2.dilate(gray, np.ones((3,3), np.uint8))
+median = cv2.medianBlur(gray, 3)
+results += [('Min Filter', gerode), ('Max Filter', dilate), ('Median Filter', median)]
+
+# Wyświetl wszystkie wyniki w okienkach
+for title, res in results:
+    # jeśli obraz jednokanałowy, przekonwertuj na BGR dla wyświetlania
+    if len(res.shape) == 2:
+        disp = cv2.cvtColor(res, cv2.COLOR_GRAY2BGR)
+    else:
+        disp = res
+    cv2.imshow(title, disp)
+
+cv2.waitKey(0)
+cv2.destroyAllWindows()
