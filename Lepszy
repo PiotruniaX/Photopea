@@ -1,47 +1,71 @@
-# simple_image_processing.py
-# Uproszczony skrypt wykonujący wszystkie 10 operacji na pliku "image.jpg"
-# i wyświetlający wyniki w okienkach OpenCV
-
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from tkinter import Tk, Button, Label, Frame, Canvas, Scrollbar, LEFT, RIGHT, TOP, BOTH, Y, NW
+from PIL import Image, ImageTk
+import os
 
-# Wczytaj obraz (plik image.jpg w tym samym folderze)
+# === Przygotowanie obrazów ===
 img = cv2.imread('image.jpg')
 if img is None:
     raise FileNotFoundError('Brak pliku image.jpg')
 
-# Lista do przechowywania wyników i tytułów
+img2 = cv2.imread("image2.jpg")
+if img2 is None:
+    raise FileNotFoundError('Brak pliku image2.jpg')
+
+img2 = cv2.resize(img2, (img.shape[1], img.shape[0]))
+
 results = []
 
-# 1. Transformacje liniowe: rozjaśnienie, przyciemnienie, negatyw
-bright = cv2.convertScaleAbs(img, alpha=1.5, beta=30)
-dark = cv2.convertScaleAbs(img, alpha=0.5, beta=0)
-neg = 255 - img
-results += [('Bright', bright), ('Dark', dark), ('Negative', neg)]
+def add_result(name, image):
+    """Helper to store result frames"""
+    results.append((name, image))
 
-# 2. Transformacja potęgowa (gamma)
-gamma = 2.2
-lut = np.array([(i/255.0)**(1/gamma)*255 for i in range(256)], dtype=np.uint8)
-gamma_img = cv2.LUT(img, lut)
-results.append(('Gamma', gamma_img))
+# 1. Transformacje liniowe
+add_result('Bright', cv2.convertScaleAbs(img, alpha=1.5, beta=30))
+add_result('Dark', cv2.convertScaleAbs(img, alpha=0.5, beta=0))
+add_result('Negative', 255 - img)
 
-# 3. Mieszanie obrazów (add, subtract, multiply, and) – przykład z kopią
-img2 = img.copy()
-results += [
-    ('Blend Add', cv2.add(img, img2)),
-    ('Blend Subtract', cv2.subtract(img, img2)),
-    ('Blend Multiply', cv2.multiply(img, img2)),
-    ('Blend AND', cv2.bitwise_and(img, img2))
+# 2. Transformacja potęgowa – rozjaśnianie (gamma<1) i przyciemnianie (gamma>1)
+gamma_values = [0.5, 2.2]
+for g in gamma_values:
+    lut = np.array([(i/255.0)**(1/g)*255 for i in range(256)], dtype=np.uint8)
+    gamma_img = cv2.LUT(img, lut)
+    add_result(f'Gamma {g}', gamma_img)
+
+# 3. Mieszanie dwóch obrazów – 16 algorytmów
+blend_ops = [
+    ('Add', cv2.add), ('Subtract', cv2.subtract), ('Multiply', cv2.multiply), ('AND', cv2.bitwise_and),
+    ('OR', cv2.bitwise_or), ('XOR', cv2.bitwise_xor),
+    ('Weighted 0.7/0.3', lambda a, b: cv2.addWeighted(a,0.7,b,0.3,0)),
+    ('Weighted 0.5/0.5', lambda a, b: cv2.addWeighted(a,0.5,b,0.5,0)),
+    ('Weighted 0.3/0.7', lambda a, b: cv2.addWeighted(a,0.3,b,0.7,0)),
+    ('Max', np.maximum), ('Min', np.minimum),
+    ('Average', lambda a, b: ((a.astype(np.uint16)+b.astype(np.uint16))//2).astype(np.uint8)),
+    ('Difference', cv2.absdiff),
+    ('Screen', lambda a, b: (255 - ((255-a.astype(np.uint16))*(255-b.astype(np.uint16))//255)).astype(np.uint8)),
+    ('Overlay', lambda a, b: np.where(a<128, (2*a.astype(np.uint16)*b.astype(np.uint16)//255), (255 - 2*(255-a.astype(np.uint16))*(255-b.astype(np.uint16))//255)).astype(np.uint8)),
+    ('SoftLight', lambda a, b: (255*((b/255.0)+(a/255.0)-(b/255.0)*(a/255.0))).astype(np.uint8)),
+    ('HardLight', lambda a, b: np.where(b<128, (2*a.astype(np.uint16)*b.astype(np.uint16)//255), (255 - 2*(255-a.astype(np.uint16))*(255-b.astype(np.uint16))//255)).astype(np.uint8))
 ]
+for name, fn in blend_ops:
+    try:
+        res = fn(img, img2)
+        add_result(f'Blend {name}', res)
+    except Exception:
+        pass
 
-# 4. Kontrast CLAHE
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# 4. Modyfikacja kontrastu obrazu barwnego – CLAHE w przestrzeni LAB
+lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+l, a, b = cv2.split(lab)
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-cl = clahe.apply(gray)
-results.append(('CLAHE', cv2.cvtColor(np.stack([cl,cl,cl], axis=-1), cv2.COLOR_BGR2RGB)))
+cl = clahe.apply(l)
+lab_cl = cv2.merge((cl, a, b))
+clahe_bgr = cv2.cvtColor(lab_cl, cv2.COLOR_LAB2BGR)
+add_result('CLAHE', clahe_bgr)
 
-# 5. Histogram R,G,B – wygenerujemy wykres i wczytamy jako obraz
+# 5. Generowanie histogramu R, G, B
 groups = cv2.split(img)
 colors = ('b','g','r')
 plt.figure()
@@ -53,43 +77,100 @@ plt.savefig('temp_hist.png')
 plt.close()
 hist_img = cv2.imread('temp_hist.png')
 hist_img = cv2.resize(hist_img, (img.shape[1], img.shape[0]))
-results.append(('Histogram', hist_img))
+os.remove('temp_hist.png')
+add_result('Histogram', hist_img)
 
 # 6. Wyrównanie histogramu
-yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
-yuv[:,:,0] = cv2.equalizeHist(yuv[:,:,0])
-eq = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
-results.append(('EqualizeHist', eq))
+img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
+equalized = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+add_result('EqualizeHist', equalized)
 
 # 7. Skalowanie histogramu
-norm = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
-results.append(('Normalize', norm))
+normalized = cv2.normalize(img, None, 0,255, cv2.NORM_MINMAX)
+add_result('Normalize', normalized)
 
 # 8. Filtr dolnoprzepustowy (Gaussian)
-low = cv2.GaussianBlur(img, (5,5), 0)
-results.append(('Lowpass (Gaussian)', low))
+low = cv2.GaussianBlur(img, (5,5),0)
+add_result('Lowpass Gaussian', low)
 
-# 9. Filtry górnoprzepustowe (Sobel + Laplace)
-sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 1)
-sobel = cv2.convertScaleAbs(sobel)
-lap = cv2.Laplacian(gray, cv2.CV_64F)
-lap = cv2.convertScaleAbs(lap)
-results += [('Sobel', sobel), ('Laplace', lap)]
+# 9. Filtry górnoprzepustowe: Robertsa, Prewitta, Sobela, Laplace’a
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# Roberts
+krx = np.array([[1,0],[0,-1]],dtype=np.float32)
+kry = np.array([[0,1],[-1,0]],dtype=np.float32)
+add_result('Roberts X', cv2.filter2D(gray,-1,krx))
+add_result('Roberts Y', cv2.filter2D(gray,-1,kry))
+# Prewitt
+kpx = np.array([[1,0,-1],[1,0,-1],[1,0,-1]],dtype=np.float32)
+kpy = kpx.T
+add_result('Prewitt X', cv2.filter2D(gray,-1,kpx))
+add_result('Prewitt Y', cv2.filter2D(gray,-1,kpy))
+# Sobel X/Y
+add_result('Sobel X', cv2.convertScaleAbs(cv2.Sobel(gray,cv2.CV_64F,1,0)))
+add_result('Sobel Y', cv2.convertScaleAbs(cv2.Sobel(gray,cv2.CV_64F,0,1)))
+# Laplace – trzy maski
+lap_masks = [
+    np.array([[0,1,0],[1,-4,1],[0,1,0]],dtype=np.float32),
+    np.array([[1,1,1],[1,-8,1],[1,1,1]],dtype=np.float32),
+    np.array([[-1,2,-1],[2,-4,2],[-1,2,-1]],dtype=np.float32)
+]
+for i,km in enumerate(lap_masks,1):
+    add_result(f'Laplace {i}', cv2.filter2D(gray,-1,km))
 
-# 10. Filtry statystyczne: min, max, median
-gerode = cv2.erode(gray, np.ones((3,3), np.uint8))
-dilate = cv2.dilate(gray, np.ones((3,3), np.uint8))
-median = cv2.medianBlur(gray, 3)
-results += [('Min Filter', gerode), ('Max Filter', dilate), ('Median Filter', median)]
+# 10. Filtry statystyczne: min, max, medianowy
+add_result('Min Filter', cv2.erode(gray, np.ones((3,3),np.uint8)))
+add_result('Max Filter', cv2.dilate(gray, np.ones((3,3),np.uint8)))
+add_result('Median Filter', cv2.medianBlur(gray,3))
 
-# Wyświetl wszystkie wyniki w okienkach
-for title, res in results:
-    # jeśli obraz jednokanałowy, przekonwertuj na BGR dla wyświetlania
-    if len(res.shape) == 2:
-        disp = cv2.cvtColor(res, cv2.COLOR_GRAY2BGR)
-    else:
-        disp = res
-    cv2.imshow(title, disp)
+# === GUI ===
+def cvimg_to_tk(img):
+    if img.ndim==2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return ImageTk.PhotoImage(Image.fromarray(img_rgb))
 
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+def show_result(title, image):
+    tk_image = cvimg_to_tk(image)
+    result_label.config(image=tk_image)
+    result_label.image = tk_image
+    result_title.config(text=title)
+
+root = Tk()
+root.title("Przetwarzanie obrazu")
+
+# Górny panel
+top_frame = Frame(root)
+top_frame.pack(side=TOP, pady=10)
+img1_tk = cvimg_to_tk(img)
+img2_tk = cvimg_to_tk(img2)
+
+Label(top_frame, text="image.jpg").pack(side=LEFT, padx=10)
+Label(top_frame, image=img1_tk).pack(side=LEFT, padx=10)
+
+Label(top_frame, text="image2.jpg").pack(side=LEFT, padx=10)
+Label(top_frame, image=img2_tk).pack(side=LEFT, padx=10)
+
+# Środkowy panel
+top=Frame(root); top.pack(fill=BOTH, expand=True)
+# Canvas + Scrollbar dla przycisków
+canvas = Canvas(top, width=200)
+scrollbar = Scrollbar(top, orient='vertical', command=canvas.yview)
+canvas.configure(yscrollcommand=scrollbar.set)
+scrollbar.pack(side=LEFT, fill=Y)
+canvas.pack(side=LEFT, fill=BOTH, expand=True)
+button_frame = Frame(canvas)
+canvas.create_window((0,0), window=button_frame, anchor=NW)
+button_frame.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+# Dodaj przyciski
+for title, output in results:
+    Button(button_frame, text=title, width=20, command=lambda t=title, i=output: show_result(t, i)).pack(pady=2)
+# Panel wyników
+result_frame = Frame(top)
+result_frame.pack(side=RIGHT, fill=BOTH, expand=True)
+result_title = Label(result_frame, text="Kliknij przycisk", font=("Arial",14))
+result_title.pack(pady=5)
+result_label = Label(result_frame)
+result_label.pack()
+
+root.mainloop()
