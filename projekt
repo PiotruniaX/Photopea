@@ -1,230 +1,129 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from tkinter import Tk, Button, Label, Frame, LEFT, RIGHT, TOP, BOTTOM
+from PIL import Image, ImageTk
 
-# -------------------------------
-# 1. Linear Transformations
-# -------------------------------
-def linear_transform(img, alpha=1.0, beta=0):
-    """
-    Perform linear transformation: output = alpha * img + beta
-    alpha >1 brightens (contrast), alpha<1 darkens; beta shifts brightness
-    """
-    return cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
+# === Przygotowanie obrazów ===
+img = cv2.imread('image.jpg')
+if img is None:
+    raise FileNotFoundError('Brak pliku image.jpg')
 
-def negative(img):
-    """Compute negative of image"""
-    return 255 - img
+img2 = cv2.imread("image2.jpg")
+if img2 is None:
+    raise FileNotFoundError('Brak pliku image2.jpg')
 
-# -------------------------------
-# 2. Power (Gamma) Transform
-# -------------------------------
-def power_transform(img, gamma=1.0, c=1.0):
-    """
-    Perform power-law (gamma) transformation: c * (img_norm)^gamma
-    img_norm in [0,1]
-    """
-    img_norm = img / 255.0
-    out = c * np.power(img_norm, gamma)
-    out_uint8 = np.uint8(np.clip(out * 255, 0, 255))
-    return out_uint8
+img2 = cv2.resize(img2, (img.shape[1], img.shape[0]))
 
-# -------------------------------
-# 3. Blend Two Images (16 modes)
-# -------------------------------
+results = []
 
-def blend_images(img1, img2, mode='add', alpha=0.5):
-    """
-    Blend two images with a specified mode.
-    Supported modes: add, subtract, multiply, divide,
-    average, weighted, min, max,
-    bit_and, bit_or, bit_xor,
-    screen, overlay, difference, dodge, burn
-    """
-    # Ensure same size
-    assert img1.shape == img2.shape, 'Images must be same size'
-    if mode == 'add':
-        return cv2.add(img1, img2)
-    if mode == 'subtract':
-        return cv2.subtract(img1, img2)
-    if mode == 'multiply':
-        return cv2.multiply(img1, img2)
-    if mode == 'divide':
-        return cv2.divide(img1, img2)
-    if mode == 'average':
-        return ((img1.astype(np.float32) + img2.astype(np.float32)) / 2).astype(np.uint8)
-    if mode == 'weighted':
-        return cv2.addWeighted(img1, alpha, img2, 1-alpha, 0)
-    if mode == 'min':
-        return np.minimum(img1, img2)
-    if mode == 'max':
-        return np.maximum(img1, img2)
-    if mode == 'bit_and':
-        return cv2.bitwise_and(img1, img2)
-    if mode == 'bit_or':
-        return cv2.bitwise_or(img1, img2)
-    if mode == 'bit_xor':
-        return cv2.bitwise_xor(img1, img2)
-    # Advanced blend modes
-    img1_f = img1.astype(np.float32)/255.0
-    img2_f = img2.astype(np.float32)/255.0
-    if mode == 'screen':
-        out = 1 - (1-img1_f)*(1-img2_f)
-    elif mode == 'overlay':
-        mask = img1_f <= 0.5
-        out = np.zeros_like(img1_f)
-        out[mask] = 2 * img1_f[mask] * img2_f[mask]
-        out[~mask] = 1 - 2*(1-img1_f[~mask])*(1-img2_f[~mask])
-    elif mode == 'difference':
-        out = np.abs(img1_f - img2_f)
-    elif mode == 'dodge':
-        out = np.minimum(img1_f / (1 - img2_f + 1e-6), 1.0)
-    elif mode == 'burn':
-        out = 1 - np.minimum((1-img1_f) / (img2_f + 1e-6), 1.0)
-    else:
-        raise ValueError(f"Unknown blend mode: {mode}")
-    return np.uint8(np.clip(out * 255, 0, 255))
+# --- Operacje ---
+bright = cv2.convertScaleAbs(img, alpha=1.5, beta=30)
+dark = cv2.convertScaleAbs(img, alpha=0.5, beta=0)
+neg = 255 - img
+results += [('Bright', bright), ('Dark', dark), ('Negative', neg)]
 
-# -------------------------------
-# 4. Color Contrast Modulation
-# -------------------------------
-def adjust_color_contrast(img, clip_limit=2.0, tile_grid_size=(8,8)):
-    """
-    Adjust contrast of color image using CLAHE on the L channel in Lab space
-    """
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-    cl = clahe.apply(l)
-    merged = cv2.merge((cl, a, b))
-    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+gamma = 2.2
+lut = np.array([(i/255.0)**(1/gamma)*255 for i in range(256)], dtype=np.uint8)
+gamma_img = cv2.LUT(img, lut)
+results.append(('Gamma', gamma_img))
 
-# -------------------------------
-# 5. Histogram Generation
-# -------------------------------
+results += [
+    ('Blend Add', cv2.add(img, img2)),
+    ('Blend Subtract', cv2.subtract(img, img2)),
+    ('Blend Multiply', cv2.multiply(img, img2)),
+    ('Blend AND', cv2.bitwise_and(img, img2))
+]
 
-def plot_histogram(img, save_path=None):
-    """
-    Generate and optionally save histogram for R, G, B channels.
-    Returns matplotlib figure.
-    """
-    colors = ('b','g','r')
-    plt.figure()
-    for i, col in enumerate(colors):
-        hist = cv2.calcHist([img], [i], None, [256], [0,256])
-        plt.plot(hist, color=col)
-    plt.title('Histogram for B, G, R channels')
-    plt.xlabel('Pixel value')
-    plt.ylabel('Count')
-    if save_path:
-        plt.savefig(save_path)
-    return plt.gcf()
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+cl = clahe.apply(gray)
+clahe_rgb = cv2.cvtColor(np.stack([cl]*3, axis=-1), cv2.COLOR_BGR2RGB)
+results.append(('CLAHE', clahe_rgb))
 
-# -------------------------------
-# 6. Histogram Equalization
-# -------------------------------
+groups = cv2.split(img)
+colors = ('b','g','r')
+plt.figure()
+for ch, col in zip(groups, colors):
+    hist = cv2.calcHist([ch],[0],None,[256],[0,256])
+    plt.plot(hist, label=col)
+plt.legend(); plt.title('Histogram RGB')
+plt.savefig('temp_hist.png')
+plt.close()
+hist_img = cv2.imread('temp_hist.png')
+hist_img = cv2.resize(hist_img, (img.shape[1], img.shape[0]))
+results.append(('Histogram', hist_img))
 
-def histogram_equalization(img):
-    """
-    Perform histogram equalization on each channel separately
-    """
-    channels = cv2.split(img)
-    eq_channels = [cv2.equalizeHist(ch) for ch in channels]
-    return cv2.merge(eq_channels)
+yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+yuv[:,:,0] = cv2.equalizeHist(yuv[:,:,0])
+eq = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
+results.append(('EqualizeHist', eq))
 
-# -------------------------------
-# 7. Histogram Scaling (Stretching)
-# -------------------------------
+norm = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+results.append(('Normalize', norm))
 
-def histogram_stretch(img, in_min=0, in_max=255):
-    """
-    Perform contrast stretching: map [in_min,in_max] to [0,255]
-    """
-    lut = np.array([(i - in_min) * 255.0 / (in_max - in_min) if in_min < i < in_max else (0 if i<=in_min else 255)
-                    for i in range(256)], dtype=np.uint8)
-    return cv2.LUT(img, lut)
+low = cv2.GaussianBlur(img, (5,5), 0)
+results.append(('Lowpass (Gaussian)', low))
 
-# -------------------------------
-# 8. Low-Pass Filter
-# -------------------------------
+sobel = cv2.Sobel(gray, cv2.CV_64F, 1, 1)
+sobel = cv2.convertScaleAbs(sobel)
+lap = cv2.Laplacian(gray, cv2.CV_64F)
+lap = cv2.convertScaleAbs(lap)
+results += [('Sobel', sobel), ('Laplace', lap)]
 
-def low_pass_filter(img, ksize=3, filter_type='mean'):
-    """
-    Apply low-pass filter: 'mean' or 'gaussian'
-    """
-    if filter_type == 'mean':
-        return cv2.blur(img, (ksize, ksize))
-    elif filter_type == 'gaussian':
-        return cv2.GaussianBlur(img, (ksize, ksize), 0)
-    else:
-        raise ValueError("filter_type must be 'mean' or 'gaussian'")
+gerode = cv2.erode(gray, np.ones((3,3), np.uint8))
+dilate = cv2.dilate(gray, np.ones((3,3), np.uint8))
+median = cv2.medianBlur(gray, 3)
+results += [('Min Filter', gerode), ('Max Filter', dilate), ('Median Filter', median)]
 
-# -------------------------------
-# 9. High-Pass Filters
-# -------------------------------
 
-def high_pass_filter(img, operator='sobel', direction='horizontal'):
-    """
-    High-pass filters: 'roberts','prewitt','sobel','laplace'
-    For roberts/prewitt/sobel: direction 'horizontal' or 'vertical'
-    For laplace: operator 'laplace' and direction ignored
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    if operator == 'roberts':
-        kx = np.array([[1, 0], [0, -1]], dtype=int)
-        ky = np.array([[0, 1], [-1, 0]], dtype=int)
-        kernel = kx if direction=='horizontal' else ky
-        filtered = cv2.filter2D(gray, -1, kernel)
-    elif operator == 'prewitt':
-        kx = np.array([[ -1, 0, 1], [ -1, 0, 1], [ -1, 0, 1]])
-        ky = kx.T
-        kernel = kx if direction=='horizontal' else ky
-        filtered = cv2.filter2D(gray, -1, kernel)
-    elif operator == 'sobel':
-        if direction == 'horizontal': filtered = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
-        else: filtered = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
-        filtered = cv2.convertScaleAbs(filtered)
-    elif operator == 'laplace':
-        # three different masks
-        kernels = [np.array([[0,1,0],[1,-4,1],[0,1,0]]),
-                   np.array([[1,1,1],[1,-8,1],[1,1,1]]),
-                   np.array([[2,-1,2],[-1,-4,-1],[2,-1,2]])]
-        # apply all and sum
-        filtered = sum([cv2.filter2D(gray, -1, k) for k in kernels])
-    else:
-        raise ValueError("Unsupported operator")
-    return filtered
+# === GUI ===
+def cvimg_to_tk(img):
+    if len(img.shape) == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return ImageTk.PhotoImage(Image.fromarray(img_rgb))
 
-# -------------------------------
-# 10. Statistical Filters
-# -------------------------------
+def show_result(title, image):
+    tk_image = cvimg_to_tk(image)
+    result_label.config(image=tk_image)
+    result_label.image = tk_image
+    result_title.config(text=title)
 
-def statistical_filter(img, mode='median', ksize=3):
-    """
-    Statistical filters: 'min','max','median'
-    """
-    if mode == 'min':
-        return cv2.erode(img, np.ones((ksize,ksize),np.uint8))
-    if mode == 'max':
-        return cv2.dilate(img, np.ones((ksize,ksize),np.uint8))
-    if mode == 'median':
-        return cv2.medianBlur(img, ksize)
-    raise ValueError("Unknown mode")
+root = Tk()
+root.title("Przetwarzanie obrazu")
 
-# -------------------------------
-# Example usage
-# -------------------------------
-if __name__ == '__main__':
-    img = cv2.imread('image.jpg')
-    bright = linear_transform(img, alpha=1.2, beta=20)
-    dark = linear_transform(img, alpha=0.8, beta=0)
-    neg = negative(img)
-    gamma_up = power_transform(img, gamma=0.5)
-    gamma_down = power_transform(img, gamma=2.0)
-    cv2.imwrite('bright.jpg', bright)
-    cv2.imwrite('dark.jpg', dark)
-    cv2.imwrite('neg.jpg', neg)
-    cv2.imwrite('gamma_up.jpg', gamma_up)
-    cv2.imwrite('gamma_down.jpg', gamma_down)
-    # ... and so on for other functions
-    print('Processing complete.')
+# Górny panel z obrazami źródłowymi
+top_frame = Frame(root)
+top_frame.pack(side=TOP, pady=10)
+
+img1_tk = cvimg_to_tk(img)
+img2_tk = cvimg_to_tk(img2)
+
+Label(top_frame, text="image.jpg").pack(side=LEFT, padx=10)
+Label(top_frame, image=img1_tk).pack(side=LEFT, padx=10)
+
+Label(top_frame, text="image2.jpg").pack(side=LEFT, padx=10)
+Label(top_frame, image=img2_tk).pack(side=LEFT, padx=10)
+
+# Środkowa część – przyciski po lewej, wynik po prawej
+middle_frame = Frame(root)
+middle_frame.pack(side=TOP, fill='both', expand=True, padx=10, pady=10)
+
+button_frame = Frame(middle_frame)
+button_frame.pack(side=LEFT, anchor='n', padx=10)
+
+display_frame = Frame(middle_frame)
+display_frame.pack(side=RIGHT, fill='both', expand=True)
+
+result_title = Label(display_frame, text="Kliknij przycisk, aby zobaczyć wynik", font=("Arial", 14))
+result_title.pack(pady=5)
+
+result_label = Label(display_frame)
+result_label.pack()
+
+# Przyciski operacji
+for title, output in results:
+    Button(button_frame, text=title, width=20, command=lambda t=title, i=output: show_result(t, i)).pack(pady=2)
+
+root.mainloop()
