@@ -5,122 +5,94 @@ from tkinter import *
 from PIL import Image, ImageTk
 import os
 
-# === Przygotowanie obrazów ===
-DOCELNY_ROZMIAR = (360, 240)  # możesz zmienić na dowolne (width, height)
+# Stała rozmiaru do którego będą skalowane obrazy
+ROZMIAR = (360, 240)
 
+# Funkcja wczytuje obraz z dysku i skaluje go do zadanego rozmiaru
 def load_and_resize(path, size):
     img = cv2.imread(path)
     if img is None:
         raise FileNotFoundError(f'Brak pliku: {path}')
     return cv2.resize(img, size, interpolation=cv2.INTER_AREA)
 
-# --- Wczytanie i przeskalowanie obu obrazów ---
-img = load_and_resize('image1.jpg', DOCELNY_ROZMIAR)
-img2 = load_and_resize('image2.jpg', DOCELNY_ROZMIAR)
+# Wczytanie i skalowanie dwóch obrazów
+img = load_and_resize('image.jpg', ROZMIAR)
+img2 = load_and_resize('image2.jpg', ROZMIAR)
 
+# Lista do przechowywania wyników
 results = []
 
+# Funkcja dodająca przetworzony obraz do listy wyników
 def add_result(name, image):
-    """Helper to store result frames"""
     results.append((name, image))
 
 # 1. Transformacje liniowe
-add_result('Bright', cv2.convertScaleAbs(img, alpha=1.5, beta=30))
-add_result('Dark', cv2.convertScaleAbs(img, alpha=0.5, beta=0))
-add_result('Negative', 255 - img)
+add_result('Rozjaśnianie', cv2.convertScaleAbs(img, alpha=1.5, beta=30))
+add_result('Przyciemnianie', cv2.convertScaleAbs(img, alpha=0.5, beta=0))
+add_result('Negatyw', 255 - img)
 
-# 2. Transformacja potęgowa – rozjaśnianie (gamma<1) i przyciemnianie (gamma>1)
+# 2. Transformacja potęgowa (gamma) g<1 rozjaśnia g>1 przyciemnia
 gamma_values = [0.5, 2.2]
 for g in gamma_values:
     lut = np.array([(i/255.0)**(1/g)*255 for i in range(256)], dtype=np.uint8)
-    gamma_img = cv2.LUT(img, lut)
-    add_result(f'Gamma {g}', gamma_img)
+    gamma = cv2.LUT(img, lut)
+    add_result(f'Gamma {g}', gamma)
 
-# 3. Mieszanie dwóch obrazów – 16 algorytmów
-# --- Przygotowanie obrazów jako float32 w [0..1] ---
+# 3. Mieszanie dwóch obrazów różnymi metodami
 img_f  = img.astype(np.float32) / 255.0
 img2_f = img2.astype(np.float32) / 255.0
 
-# --- Definicja 16 trybów mieszania ---
-blend_ops = [
-    ('Suma',lambda a, b: np.clip(a + b, 0, 1)),                                   # Additive
-    ('Odejmowanie',lambda a, b: np.clip(a + b - 1, 0, 1)),                               # Subtractive
-    ('Różnica',lambda a, b: np.abs(a - b)),                                         # Difference
-    ('Mnożenie',lambda a, b: a * b),                                                # Multiply
-    ('Mnożenie odwrotności', lambda a, b: 1 - (1 - a) * (1 - b)),                           # Screen
-    ('Negacja',lambda a, b: 1 - np.abs(1 - a - b)),                                 # Negation
-    ('Ciemniejsze',lambda a, b: np.minimum(a, b)),                                       # Darken
-    ('Jaśniejsze',lambda a, b: np.maximum(a, b)),                                       # Lighten
-    ('Wyłączenie',lambda a, b: a + b - 2 * a * b),                                     # Exclusion
-    ('Nakładka',lambda a, b: np.where(                                              # Overlay
-                         a < 0.5,
-                         2 * a * b,
-                         1 - 2 * (1 - a) * (1 - b)
-                     )),
-    ('Ostre światło',  lambda a, b: np.where(                                              # Hard light
-                         b < 0.5,
-                         2 * a * b,
-                         1 - 2 * (1 - a) * (1 - b)
-                     )),
-    ('Łagodne światło',lambda a, b: np.where(                                              # Soft light
-                         b < 0.5,
-                         2 * a * b + a * a * (1 - 2 * b),
-                         np.sqrt(a) * (2 * b - 1) + 2 * a * (1 - b)
-                     )),
-    ('Rozcieńczenie',  lambda a, b: np.where(                                              # Color dodge
-                         b < 1.0,
-                         np.clip(a / (1 - b), 0, 1),
-                         1.0
-                     )),
-    ('Wypalanie',      lambda a, b: np.where(                                              # Color burn
-                         b > 0.0,
-                         1 - np.clip((1 - a) / b, 0, 1),
-                         0.0
-                     )),
-    ('Odbicie',        lambda a, b: np.where(                                              # Reflect
-                         b < 1.0,
-                         np.clip(a * a / (1 - b), 0, 1),
-                         1.0
-                     )),
-    ('Przezroczystość',lambda a, b, alpha=0.5: (1 - alpha) * b + alpha * a),                # Opacity
+# Lista 16 metod mieszania tworzymy krotkę z nazwami i funkcjami
+metody_mieszania = [
+    ('Suma', lambda a, b: np.clip(a + b, 0, 1)), #sumujemy pixele i przycinamy aby nie wychodził poza wartości
+    ('Odejmowanie', lambda a, b: np.clip(a + b - 1, 0, 1)), #odejmujemy 1 co przesuwa wynikj w dół
+    ('Różnica', lambda a, b: np.abs(a - b)), #bierzemy wynik bezwzględny
+    ('Mnożenie', lambda a, b: a * b), #mnoży piksele dając przyciemnienie
+    ('Mnożenie odwrotności', lambda a, b: 1 - (1 - a) * (1 - b)),#odwraca mnoży i odwraca co rozjaśnia
+    ('Negacja', lambda a, b: 1 - np.abs(1 - a - b)),
+    ('Ciemniejsze', lambda a, b: np.minimum(a, b)),#wybiera ciemniejszy piksel
+    ('Jaśniejsze', lambda a, b: np.maximum(a, b)),# jaśniejszy piksel
+    ('Wyłączenie', lambda a, b: a + b - 2 * a * b),#obniża kontrast
+    ('Nakładka', lambda a, b: np.where(a < 0.5, 2 * a * b, 1 - 2 * (1 - a) * (1 - b))),
+    ('Ostre światło', lambda a, b: np.where(b < 0.5, 2 * a * b, 1 - 2 * (1 - a) * (1 - b))),
+    ('Łagodne światło', lambda a, b: np.where(b < 0.5, 2 * a * b + a * a * (1 - 2 * b), np.sqrt(a) * (2 * b - 1) + 2 * a * (1 - b))),
+    ('Rozcieńczenie', lambda a, b: np.where(b < 1.0, np.clip(a / (1 - b), 0, 1), 1.0)),
+    ('Wypalanie', lambda a, b: np.where(b > 0.0, 1 - np.clip((1 - a) / b, 0, 1), 0.0)),
+    ('Reflect mode', lambda a, b: np.where(1.0, np.clip(a * a / (1 - b), 0, 1), 1.0)),
+    ('Przezroczystość', lambda a, b, alpha=0.5: (1 - alpha) * b + alpha * a),
 ]
 
-# --- Dodanie wyników do listy ---
-for name, fn in blend_ops:
-    if name == 'Przezroczystość':
-        out_f = fn(img_f, img2_f, alpha=0.7)  # ustawienie α
-    else:
-        out_f = fn(img_f, img2_f)
-    out_u8 = (np.clip(out_f, 0, 1) * 255).astype(np.uint8)
+# Zastosowanie każdej metody mieszania i dodanie do wyników
+for name, fn in metody_mieszania:
+    out_f = fn(img_f, img2_f)
+    out_u8 = (np.clip(out_f, 0, 1) * 255).astype(np.uint8) #sprawdza czy wartości się mieszczą, i konwertuje do typu obrazu
     add_result(f'Mieszanie: {name}', out_u8)
 
-
-# 4. Modyfikacja kontrastu obrazu barwnego
+#  4. Modyfikacja kontrastu obrazu barwnego
 def korekcja_kontrastu_v1(img, c):
-    # img: uint8 [0..255], c: int w [-127..127]
-    img_i = img.astype(np.int16)  # pozwala na wartości ujemne przy odejmowaniu c
+    img_i = img.astype(np.int16) #konversja obrazu do 16bitowej liczby całkowitej
     if c >= 0:
-        # wzór a): v' = (127/(127-c))*(v - c)
-        faktor = 127.0 / (127.0 - c)
+        faktor = 127.0 / (127.0 - c) #zwiększanie kontrastu
     else:
-        # wzór b): v' = ((127+c)/127)*(v - c)
-        faktor = (127.0 + c) / 127.0
+        faktor = (127.0 + c) / 127.0 #zmniejszanie kontrastu
+    # przesunięcie każdego piksela o c i pomnożenie przez faktor
+    #gdy c> większa różnica między pikselami czyli większy kontrast
     out = faktor * (img_i - c)
     return np.clip(out, 0, 255).astype(np.uint8)
 
-# przykładowe parametry c:
-for c in (50, -50):
+# Przykładowe wartości kontrastu
+l = [-100,20,100]
+for c in l:
     wynik = korekcja_kontrastu_v1(img, c)
     nazwa = f'Kontrast c={c:+d}'
     add_result(nazwa, wynik)
 
-# 5. Generowanie histogramu R, G, B
-
-groups = cv2.split(img2)
-colors = ('b','g','r')
+#  5. Generowanie histogramu pokazuje ilość pikseli o danej jasności dla każdego kanału
+groups = cv2.split(img2) # krotka przechowująca wartości BGR
+colors = ('b', 'g', 'r')
 plt.figure()
-for ch, col in zip(groups, colors):
-    hist = cv2.calcHist([ch],[0],None,[256],[0,256])
+for ch, col in zip(groups, colors): #ch kanał
+    hist = cv2.calcHist([ch], [0], None, [256], [0, 256])
     plt.plot(hist, label=col)
 plt.legend(); plt.title('Histogram RGB')
 plt.savefig('hist.jpg')
@@ -130,110 +102,120 @@ hist_img = cv2.resize(hist_img, (img.shape[1], img.shape[0]))
 os.remove('hist.jpg')
 add_result('Histogram', hist_img)
 
-# 6. Wyrównanie histogramu
+# 6. Wyrównanie histogramu Poprawia kontrast obrazu poprzez rozciągnięcie rozkładu jasności
 img_wyr = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
-img_wyr[:,:,0] = cv2.equalizeHist(img_wyr[:,:,0])
+img_wyr[:, :, 0] = cv2.equalizeHist(img_wyr[:, :, 0])
 wyrownanie = cv2.cvtColor(img_wyr, cv2.COLOR_YUV2BGR)
 add_result('Wyrównanie Histogramu', wyrownanie)
 
-# 7. Skalowanie histogramu
-normalized = cv2.normalize(img, None, 0,255, cv2.NORM_MINMAX)
-add_result('Skalowanie Histogramu', normalized)
+#  7. Skalowanie histogramu  Normalizuje obraz, skalując wartości pikseli do pełnego zakresu 0–255
+skalowanie = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+add_result('Skalowanie Histogramu', skalowanie)
 
-# 8. Filtr dolnoprzepustowy (Gaussian)
-low = cv2.GaussianBlur(img, (5,5),0)
-add_result('Dolnoprzepustowy', low)
+# 8. Filtr dolnoprzepustowy  Rozmywa obraz
+dolny = cv2.GaussianBlur(img, (5, 5), 0)
+add_result('Dolnoprzepustowy', dolny)
 
-# 9. Filtry górnoprzepustowe: Robertsa, Prewitta, Sobela, Laplace’a
+#  9. Filtry górnoprzepustowe
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
 # Roberts
-krx = np.array([[1,0],[0,-1]],dtype=np.float32)
-kry = np.array([[0,1],[-1,0]],dtype=np.float32)
-add_result('Roberts X', cv2.filter2D(gray,-1,krx))
-add_result('Roberts Y', cv2.filter2D(gray,-1,kry))
+Rx = np.array([[1, 0], [0, -1]], dtype=np.float32)
+Ry = np.array([[0, 1], [-1, 0]], dtype=np.float32)
+add_result('Roberts X', cv2.filter2D(gray, -1, Rx))
+add_result('Roberts Y', cv2.filter2D(gray, -1, Ry))
+
 # Prewitt
-kpx = np.array([[1,0,-1],[1,0,-1],[1,0,-1]],dtype=np.float32)
-kpy = kpx.T
-add_result('Prewitt X', cv2.filter2D(gray,-1,kpx))
-add_result('Prewitt Y', cv2.filter2D(img,-1,kpy))
-# Sobel X/Y
-add_result('Sobel X', cv2.convertScaleAbs(cv2.Sobel(img,cv2.CV_64F,1,0)))
-add_result('Sobel Y', cv2.convertScaleAbs(cv2.Sobel(img,cv2.CV_64F,0,1)))
-# Laplace – trzy maski
-lap_masks = [
-    np.array([[0,-1,0],[-1,4,-1],[0,-1,0]],dtype=np.float32),
-    np.array([[-1,-1,-1],[-1,8,-1],[-1,-1,-1]],dtype=np.float32),
-    np.array([[-2,1,-2],[1,4,1],[-2,1,-2]],dtype=np.float32)
+Px = np.array([[1, 0, -1], [1, 0, -1], [1, 0, -1]], dtype=np.float32)
+Py = Px.T
+add_result('Prewitt X', cv2.filter2D(gray, -1, Px))
+add_result('Prewitt Y', cv2.filter2D(img, -1, Py))
+
+# Sobel
+add_result('Sobel X', cv2.convertScaleAbs(cv2.Sobel(img, cv2.CV_64F, 1, 0)))
+add_result('Sobel Y', cv2.convertScaleAbs(cv2.Sobel(img, cv2.CV_64F, 0, 1)))
+
+# Laplace (3 maski)
+maski_L = [
+    np.array([[0, -1, 0], [-1, 4, -1], [0, -1, 0]], dtype=np.float32),
+    np.array([[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]], dtype=np.float32),
+    np.array([[-2, 1, -2], [1, 4, 1], [-2, 1, -2]], dtype=np.float32)
 ]
-for i,km in enumerate(lap_masks,1):
-    add_result(f'Laplace {i}', cv2.filter2D(gray,-1,km))
+for i, km in enumerate(maski_L, 1):
+    add_result(f'Laplace {i}', cv2.filter2D(gray, -1, km))
 
-# 10. Filtry statystyczne: min, max, medianowy
-add_result('Min Filter', cv2.erode(img, np.ones((2,2),np.uint8)))
-add_result('Max Filter', cv2.dilate(img, np.ones((2,2),np.uint8)))
-add_result('Median Filter', cv2.medianBlur(img,5))
+# 10. Filtry statystyczne
+add_result('Min Filter', cv2.erode(img, np.ones((2, 2), np.uint8)))       #redukuje jasne punkty
+add_result('Max Filter', cv2.dilate(img, np.ones((2, 2), np.uint8)))       # rozjaśnia
+add_result('Median Filter', cv2.medianBlur(img, 5))                        # wygładza obraz
 
-# === GUI ===
+#  GUI
+
+# Konwersja obrazu OpenCV do formatu akceptowanego przez Tkinter
 def cvimg_to_tk(img):
-    if img.ndim==2:
+    """
+    sprawdza czy dany obraz nie jest kolorowy
+    jeśli tak to to konwertuje do na obraz kolorowy BGR
+    na koniec konwertuje do na RGB
+    zwraca obiekt w formacie PIL.Image
+    """
+    if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return ImageTk.PhotoImage(Image.fromarray(img_rgb))
 
+# Funkcja do wyświetlania wybranego wyniku
 def show_result(title, image):
+    """
+    funkcja służy do pokazywania w okienku zdjęcia poprzez nadpisywanie label
+    """
     tk_image = cvimg_to_tk(image)
     result_label.config(image=tk_image)
     result_label.image = tk_image
     result_title.config(text=title)
 
+# Główne okno aplikacji
 root = Tk()
 root.title("Przetwarzanie obrazu")
 root.geometry("1050x600")
 
-# Główny podział na lewo (przyciski) i prawo (obrazy + wynik)
+# Podział okna głównego
 main_frame = Frame(root)
 main_frame.pack(fill=BOTH, expand=True)
 
-# Lewy panel - przyciski + scrollbar
+# Lewy panel z przyciskami i paskiem przewijania
 left_frame = Frame(main_frame)
 left_frame.pack(side=LEFT, fill=Y)
 
+# Scrollbar
 canvas = Canvas(left_frame, width=200)
 scrollbar = Scrollbar(left_frame, orient=VERTICAL, command=canvas.yview)
 canvas.configure(yscrollcommand=scrollbar.set)
-
 scrollbar.pack(side=LEFT, fill=Y)
 canvas.pack(side=LEFT, fill=Y, expand=True)
 
 button_frame = Frame(canvas)
 canvas.create_window((0, 0), window=button_frame, anchor='nw')
-
 button_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
-# Tutaj dodajemy przyciski
+# Dodanie przycisków z wynikami
 for title, output in results:
     Button(button_frame, text=title, width=25, command=lambda t=title, i=output: show_result(t, i)).pack(pady=2)
 
-# Prawy panel - obrazy i wynik
+# Prawy panel - obrazy źródłowe + wynik przetwarzania
 right_frame = Frame(main_frame)
 right_frame.pack(side=LEFT, fill=BOTH, expand=True)
 
-# Obrazy obok siebie
 top_images_frame = Frame(right_frame)
 top_images_frame.pack(pady=10)
 
 img1_tk = cvimg_to_tk(img)
 img2_tk = cvimg_to_tk(img2)
 
-img1_label = Label(top_images_frame)
-img1_label.pack(side=LEFT, padx=10)
 Label(top_images_frame, image=img1_tk).pack(side=LEFT, padx=10)
-
-img2_label = Label(top_images_frame)
-img2_label.pack(side=LEFT, padx=10)
 Label(top_images_frame, image=img2_tk).pack(side=LEFT, padx=10)
 
-# Wynik pod obrazkami
+# Miejsce na wynik transformacji
 result_frame = Frame(right_frame)
 result_frame.pack(pady=20)
 
@@ -243,4 +225,5 @@ result_title.pack(pady=5)
 result_label = Label(result_frame)
 result_label.pack()
 
+# Uruchomienie aplikacji
 root.mainloop()
